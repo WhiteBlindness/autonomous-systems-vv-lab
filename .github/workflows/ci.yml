@@ -1,0 +1,101 @@
+name: verification
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            exe_suffix: ""
+          - os: windows-latest
+            exe_suffix: ".exe"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.99.0"
+          components: clippy, rustfmt
+
+      - name: Install LLVM coverage support
+        if: runner.os == 'Linux'
+        run: |
+          rustup component add llvm-tools-preview --toolchain 1.99.0
+          cargo install cargo-llvm-cov --locked --version 0.9.1
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Run Rust integration tests
+        run: cargo test --locked --all-targets
+
+      - name: Enforce coverage threshold
+        if: runner.os == 'Linux'
+        run: cargo llvm-cov --locked --all-targets --fail-under-lines 80
+
+      - name: Test campaign validation
+        run: python -m unittest discover -s tests -p "test_*.py"
+
+      - name: Build release binary
+        run: cargo build --locked --release
+
+      - name: Run deterministic scenario campaign
+        run: python scripts/run_campaign.py --binary target/release/vv-lab${{ matrix.exe_suffix }} --seeds 42,1337 --output-root runs/ci-${{ runner.os }}
+
+      - name: Upload campaign artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ runner.os }}-campaign
+          path: runs/ci-${{ runner.os }}/campaign-*
+          if-no-files-found: warn
+
+    defaults:
+      run:
+        shell: bash
+
+  compare-platform-output:
+    name: Compare canonical Linux and Windows outputs
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Download campaign fingerprints
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "*-campaign"
+          path: platform-campaigns
+          merge-multiple: false
+
+      - name: Compare pinned fixture outputs
+        run: python scripts/check_platform_artifacts.py --root platform-campaigns
+        shell: bash
