@@ -1,0 +1,34 @@
+{
+  "basic-mission": {
+    "events_sha256": "42fe5c962ec0475cc504fe0e7a1645b47dab9346985e9e3ff2704aa9f7d3ebbf",
+    "report_sha256": "26974ce151ea817bbcdc2aa42d7cc37d6acb0dd10b340ea9f84a778fda60bb3a"
+  },
+  "gps-dropout": {
+    "events_sha256": "cb6a419fe9bc0962320ef6175481b5a5e83bacb943b10e808da1b5021ac4c68d",
+    "report_sha256": "97690d17c6d09d27662c446b2bd4b8e451917d47b97f9949757b0dc06e87b309"
+  },
+  "communication-fault": {
+    "events_sha256": "175a906b1f654c18fa305e27afb6c5cb8d3b8e55cebee1612c86beceae990649",
+    "report_sha256": "f62fc5a456b8a3eaad003512e2c971c18e8b185449df412eb49fff3174713ec0"
+  },
+  "restricted-zone-failure": {
+    "events_sha256": "ce92aafe6769798b698f35909269b3648ba9e8d9f55e8663ca0145d78735fb38",
+    "report_sha256": "d9c4b993f7287eda1435790a1fa10b00fdc7ad8fb5a1a841bf97a089c8f166ba"
+  },
+  "restricted-zone-boundary": {
+    "events_sha256": "8efca842e3a36f6abea1639d2886bfefb6c47fcb07ef7d5af67af409215fb4fb",
+    "report_sha256": "f1bda723742188223c2aedc3cd43414b2ff04260a9af6fd1f4e526299acb9c19"
+  },
+  "safe-fallback-failure": {
+    "events_sha256": "4fb0a134427647ede402e58f30a09cc9babed6ae51dec3afb658465478a87574",
+    "report_sha256": "3c7be8f8ff1273cae2a37e597214de75b74cb30529bfa491b9fa687e05cb3e95"
+  },
+  "invalid-transition": {
+    "events_sha256": "6533cdfe6b2b6da2514d25cd78dd2ab2419cc70f0af403f2b293a18c640e5443",
+    "report_sha256": "ed20939c4698e9faf76add91eb8623daca8e00cbc275d326670c677bdf049b24"
+  },
+  "world-bounds-failure": {
+    "events_sha256": "a7aedc1229ecd25546953093947819e151bcc49b2d41008e52f4d43e512e09b7",
+    "report_sha256": "4b12686accf379b75d5af472846cdcd791ab70c55c8bbcacb6a2abbff54f4291"
+  }
+}

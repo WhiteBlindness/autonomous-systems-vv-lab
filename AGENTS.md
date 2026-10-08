@@ -25,7 +25,7 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
 cargo build --release
-python scripts/campaign.py --help
+python scripts/run_campaign.py --seeds 42,1337,2026 --output-root runs/campaign
 ```
 
 Executar também os cenários e a campanha documentados no README. Uma violação deliberada é um resultado esperado do cenário, não uma licença para ignorar falhas dos testes. Acrescentar testes de regressão para alterações de geometria, confiança, ordem dos eventos e reprodução.
