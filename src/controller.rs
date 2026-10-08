@@ -1,29 +1,62 @@
-use crate::artifact::Recorder;
-use crate::engine::RunState;
 use crate::model::{
-    Action, EventPayload, Heading, MissionState, ObservedTelemetry, Point, SafetyState, Scenario,
-    TransitionReport, ValidationMutant,
+    Action, Bounds, Heading, MissionConfig, MissionState, ObservedTelemetry, Point, SafetyState,
 };
-use crate::verifier::InvariantTracker;
+
+/// Entrada limitada do controlador, composta por observações e configuração.
+///
+/// O tipo não transporta a posição real do veículo nem o estado interno da execução.
+///
+/// ```compile_fail
+/// use autonomous_systems_vv_lab::controller::ControllerInput;
+/// fn read_truth(input: ControllerInput<'_>) -> i32 {
+///     input.truth.x_mm
+/// }
+/// ```
+pub struct ControllerInput<'a> {
+    pub mission_state: MissionState,
+    pub safety_state: SafetyState,
+    pub observed: Option<&'a ObservedTelemetry>,
+    pub target: Option<Point>,
+    pub step_mm: i32,
+    pub bounds: &'a Bounds,
+    pub confidence_threshold_permille: u16,
+}
 
 #[derive(Clone, Debug)]
-pub(crate) struct ControlContext {
-    pub(crate) desired_heading: Option<Heading>,
-    pub(crate) next_within_bounds: bool,
+pub(crate) struct ControllerState {
+    pub(crate) mission_state: MissionState,
+    pub(crate) safety_state: SafetyState,
+    pub(crate) waypoint_index: usize,
+    pub(crate) recovery_streak: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TransitionIntent {
+    pub(crate) subsystem: String,
+    pub(crate) from: String,
+    pub(crate) to: String,
+    pub(crate) reason: String,
+}
+
+impl ControllerState {
+    pub(crate) fn new() -> Self {
+        Self {
+            mission_state: MissionState::Pending,
+            safety_state: SafetyState::Nominal,
+            waypoint_index: 0,
+            recovery_streak: 0,
+        }
+    }
 }
 
 pub(crate) fn update_mission(
-    scenario: &Scenario,
-    tick: u32,
+    mission: &MissionConfig,
+    confidence_threshold_permille: u16,
+    invalid_mutant: bool,
     observed: Option<&ObservedTelemetry>,
-    state: &mut RunState,
-    recorder: &mut Recorder,
-    tracker: &mut InvariantTracker,
-    transition_sequences: &mut Vec<u64>,
-) {
-    let invalid_mutant = scenario
-        .validation_mutants
-        .contains(&ValidationMutant::InvalidMissionTransition);
+    state: &mut ControllerState,
+) -> Vec<TransitionIntent> {
+    let mut transitions = Vec::new();
     if state.mission_state == MissionState::Pending {
         let next_state = if invalid_mutant {
             MissionState::Completed
@@ -35,10 +68,7 @@ pub(crate) fn update_mission(
         } else {
             "mission_started"
         };
-        transition_sequences.push(record_transition(
-            recorder,
-            tracker,
-            tick,
+        transitions.push(transition_intent(
             "mission",
             state.mission_state,
             next_state,
@@ -47,27 +77,24 @@ pub(crate) fn update_mission(
         state.mission_state = next_state;
     }
     if state.mission_state != MissionState::Running {
-        return;
+        return transitions;
     }
     let Some(observation) = observed.filter(|sample| {
-        sample.fresh && sample.confidence_permille >= scenario.safety.confidence_threshold_permille
+        sample.fresh && sample.confidence_permille >= confidence_threshold_permille
     }) else {
-        return;
+        return transitions;
     };
     let position = observation.position;
-    while state.waypoint_index < scenario.mission.waypoints.len()
+    while state.waypoint_index < mission.waypoints.len()
         && position.within_radius(
-            scenario.mission.waypoints[state.waypoint_index],
-            scenario.mission.arrival_radius_mm,
+            mission.waypoints[state.waypoint_index],
+            mission.arrival_radius_mm,
         )
     {
         state.waypoint_index += 1;
     }
-    if state.waypoint_index == scenario.mission.waypoints.len() {
-        transition_sequences.push(record_transition(
-            recorder,
-            tracker,
-            tick,
+    if state.waypoint_index == mission.waypoints.len() {
+        transitions.push(transition_intent(
             "mission",
             MissionState::Running,
             MissionState::Completed,
@@ -75,49 +102,70 @@ pub(crate) fn update_mission(
         ));
         state.mission_state = MissionState::Completed;
     }
+    transitions
 }
 
-pub(crate) fn control_context(
-    scenario: &Scenario,
-    mission_state: MissionState,
-    waypoint_index: usize,
-    observed: Option<&ObservedTelemetry>,
-) -> ControlContext {
-    if mission_state == MissionState::Completed
-        || waypoint_index >= scenario.mission.waypoints.len()
+pub(crate) fn update_safety(
+    recovery_after_ticks: u32,
+    low_confidence: bool,
+    watchdog_required: bool,
+    state: &mut ControllerState,
+) -> Vec<TransitionIntent> {
+    let mut transitions = Vec::new();
+    state.recovery_streak = if low_confidence {
+        0
+    } else {
+        state.recovery_streak.saturating_add(1)
+    };
+    match state.safety_state {
+        SafetyState::Nominal if watchdog_required => {
+            transitions.push(transition_intent(
+                "safety",
+                SafetyState::Nominal,
+                SafetyState::Fallback,
+                "low_confidence_watchdog",
+            ));
+            state.safety_state = SafetyState::Fallback;
+        }
+        SafetyState::Fallback
+            if !low_confidence && state.recovery_streak >= recovery_after_ticks =>
+        {
+            transitions.push(transition_intent(
+                "safety",
+                SafetyState::Fallback,
+                SafetyState::Nominal,
+                "confidence_recovered_for_configured_interval",
+            ));
+            state.safety_state = SafetyState::Nominal;
+        }
+        _ => {}
+    }
+    transitions
+}
+
+/// Escolhe uma ação apenas com base na entrada observável do controlador.
+pub fn choose_action(input: &ControllerInput<'_>) -> Action {
+    if input.mission_state == MissionState::Completed || input.safety_state == SafetyState::Fallback
     {
-        return ControlContext {
-            desired_heading: None,
-            next_within_bounds: true,
-        };
+        return Action::hold();
     }
-    let Some(observed) = observed else {
-        return ControlContext {
-            desired_heading: None,
-            next_within_bounds: false,
-        };
+    let Some(observed) = input.observed else {
+        return Action::hold();
     };
-    let desired = desired_heading(
-        observed.position,
-        scenario.mission.waypoints[waypoint_index],
-    );
-    let Some(heading) = desired else {
-        return ControlContext {
-            desired_heading: None,
-            next_within_bounds: true,
-        };
-    };
-    let destination = observed
-        .position
-        .translated(heading, scenario.vehicle.step_mm);
-    ControlContext {
-        desired_heading: Some(heading),
-        next_within_bounds: crate::geometry::segment_stays_in_bounds(
-            observed.position,
-            destination,
-            &scenario.bounds,
-        ),
+    if !observed.fresh || observed.confidence_permille < input.confidence_threshold_permille {
+        return Action::hold();
     }
+    let Some(target) = input.target else {
+        return Action::hold();
+    };
+    let Some(heading) = desired_heading(observed.position, target) else {
+        return Action::hold();
+    };
+    let destination = observed.position.translated(heading, input.step_mm);
+    if !crate::geometry::segment_stays_in_bounds(observed.position, destination, input.bounds) {
+        return Action::hold();
+    }
+    Action::step(heading, input.step_mm)
 }
 
 fn desired_heading(position: Point, target: Point) -> Option<Heading> {
@@ -139,107 +187,16 @@ fn desired_heading(position: Point, target: Point) -> Option<Heading> {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn update_safety(
-    scenario: &Scenario,
-    tick: u32,
-    low_confidence: bool,
-    watchdog_required: bool,
-    state: &mut RunState,
-    recorder: &mut Recorder,
-    tracker: &mut InvariantTracker,
-    transition_sequences: &mut Vec<u64>,
-) {
-    state.recovery_streak = if low_confidence {
-        0
-    } else {
-        state.recovery_streak.saturating_add(1)
-    };
-    match state.safety_state {
-        SafetyState::Nominal if watchdog_required => {
-            transition_sequences.push(record_transition(
-                recorder,
-                tracker,
-                tick,
-                "safety",
-                SafetyState::Nominal,
-                SafetyState::Fallback,
-                "low_confidence_watchdog",
-            ));
-            state.safety_state = SafetyState::Fallback;
-        }
-        SafetyState::Fallback
-            if !low_confidence && state.recovery_streak >= scenario.safety.recovery_after_ticks =>
-        {
-            transition_sequences.push(record_transition(
-                recorder,
-                tracker,
-                tick,
-                "safety",
-                SafetyState::Fallback,
-                SafetyState::Nominal,
-                "confidence_recovered_for_configured_interval",
-            ));
-            state.safety_state = SafetyState::Nominal;
-        }
-        _ => {}
-    }
-}
-
-pub(crate) fn choose_action(
-    scenario: &Scenario,
-    state: &RunState,
-    observed: Option<&ObservedTelemetry>,
-    control: &ControlContext,
-) -> Action {
-    if state.mission_state == MissionState::Completed || state.safety_state == SafetyState::Fallback
-    {
-        return Action::hold();
-    }
-    let Some(observed) = observed else {
-        return Action::hold();
-    };
-    if !observed.fresh
-        || observed.confidence_permille < scenario.safety.confidence_threshold_permille
-    {
-        return Action::hold();
-    }
-    let Some(heading) = control.desired_heading else {
-        return Action::hold();
-    };
-    if !control.next_within_bounds {
-        return Action::hold();
-    }
-    Action::step(heading, scenario.vehicle.step_mm)
-}
-
-fn record_transition(
-    recorder: &mut Recorder,
-    tracker: &mut InvariantTracker,
-    tick: u32,
+fn transition_intent(
     subsystem: &str,
     from: impl ToString,
     to: impl ToString,
     reason: &str,
-) -> u64 {
-    let from = from.to_string();
-    let to = to.to_string();
-    let reason = reason.to_owned();
-    let sequence = recorder.push(
-        tick,
-        EventPayload::Transition {
-            subsystem: subsystem.to_owned(),
-            from: from.clone(),
-            to: to.clone(),
-            reason: reason.clone(),
-        },
-    );
-    tracker.transitions.push(TransitionReport {
-        tick,
+) -> TransitionIntent {
+    TransitionIntent {
         subsystem: subsystem.to_owned(),
-        from,
-        to,
-        reason,
-    });
-    sequence
+        from: from.to_string(),
+        to: to.to_string(),
+        reason: reason.to_owned(),
+    }
 }

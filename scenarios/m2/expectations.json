@@ -1,0 +1,381 @@
+{
+  "schema_version": 1,
+  "default_seeds": [
+    42,
+    1337,
+    2026
+  ],
+  "scenarios": [
+    {
+      "name": "a-dropout-pending-delay",
+      "file": "a-dropout-pending-delay.json",
+      "expected_status": "passed",
+      "expected_invariants": {
+        "restricted_zone": true,
+        "world_bounds": true,
+        "safe_fallback": true,
+        "valid_state_transitions": true
+      },
+      "variants": {
+        "standard": {
+          "policy": {
+            "stall_window_ticks": 8,
+            "min_progress_mm": 1
+          },
+          "expected_outcomes": {
+            "42": "completed",
+            "1337": "completed",
+            "2026": "completed"
+          }
+        },
+        "short-stall": {
+          "policy": {
+            "stall_window_ticks": 4,
+            "min_progress_mm": 1
+          },
+          "expected_outcomes": {
+            "42": "completed",
+            "1337": "completed",
+            "2026": "completed"
+          }
+        }
+      }
+    },
+    {
+      "name": "b-noise-recovery-loss",
+      "file": "b-noise-recovery-loss.json",
+      "expected_status": "passed",
+      "expected_invariants": {
+        "restricted_zone": true,
+        "world_bounds": true,
+        "safe_fallback": true,
+        "valid_state_transitions": true
+      },
+      "variants": {
+        "standard": {
+          "policy": {
+            "stall_window_ticks": 8,
+            "min_progress_mm": 1
+          },
+          "expected_outcomes": {
+            "42": "stalled",
+            "1337": "incomplete",
+            "2026": "incomplete"
+          }
+        },
+        "short-stall": {
+          "policy": {
+            "stall_window_ticks": 4,
+            "min_progress_mm": 1
+          },
+          "expected_outcomes": {
+            "42": "stalled",
+            "1337": "stalled",
+            "2026": "incomplete"
+          }
+        },
+        "fault-stress": {
+          "policy": {
+            "stall_window_ticks": 8,
+            "min_progress_mm": 1
+          },
+          "expected_outcomes": {
+            "42": "stalled",
+            "1337": "incomplete",
+            "2026": "stalled"
+          },
+          "scenario_overrides": {
+            "sensors.communication.packet_loss_permille": 150
+          }
+        }
+      }
+    },
+    {
+      "name": "c-intermittent",
+      "file": "c-intermittent.json",
+      "expected_status": "passed",
+      "expected_invariants": {
+        "restricted_zone": true,
+        "world_bounds": true,
+        "safe_fallback": true,
+        "valid_state_transitions": true
+      },
+      "variants": {
+        "standard": {
+          "policy": {
+            "stall_window_ticks": 8,
+            "min_progress_mm": 1
+          },
+          "expected_outcomes": {
+            "42": "completed",
+            "1337": "completed",
+            "2026": "completed"
+          }
+        },
+        "short-stall": {
+          "policy": {
+            "stall_window_ticks": 4,
+            "min_progress_mm": 1
+          },
+          "expected_outcomes": {
+            "42": "completed",
+            "1337": "completed",
+            "2026": "completed"
+          }
+        }
+      }
+    },
+    {
+      "name": "d-safe-held-stall",
+      "file": "d-safe-held-stall.json",
+      "expected_status": "passed",
+      "expected_invariants": {
+        "restricted_zone": true,
+        "world_bounds": true,
+        "safe_fallback": true,
+        "valid_state_transitions": true
+      },
+      "variants": {
+        "standard": {
+          "policy": {
+            "stall_window_ticks": 8,
+            "min_progress_mm": 1
+          },
+          "expected_outcomes": {
+            "42": "stalled",
+            "1337": "stalled",
+            "2026": "stalled"
+          }
+        },
+        "short-stall": {
+          "policy": {
+            "stall_window_ticks": 4,
+            "min_progress_mm": 1
+          },
+          "expected_outcomes": {
+            "42": "stalled",
+            "1337": "stalled",
+            "2026": "stalled"
+          }
+        }
+      }
+    },
+    {
+      "name": "e-incomplete-safe",
+      "file": "e-incomplete-safe.json",
+      "expected_status": "passed",
+      "expected_invariants": {
+        "restricted_zone": true,
+        "world_bounds": true,
+        "safe_fallback": true,
+        "valid_state_transitions": true
+      },
+      "variants": {
+        "standard": {
+          "policy": {
+            "stall_window_ticks": 8,
+            "min_progress_mm": 1
+          },
+          "expected_outcomes": {
+            "42": "incomplete",
+            "1337": "incomplete",
+            "2026": "incomplete"
+          }
+        },
+        "short-stall": {
+          "policy": {
+            "stall_window_ticks": 4,
+            "min_progress_mm": 1
+          },
+          "expected_outcomes": {
+            "42": "incomplete",
+            "1337": "incomplete",
+            "2026": "incomplete"
+          }
+        }
+      }
+    },
+    {
+      "name": "f-zone-nominal",
+      "file": "f-zone-nominal.json",
+      "expected_status": "passed",
+      "expected_invariants": {
+        "restricted_zone": true,
+        "world_bounds": true,
+        "safe_fallback": true,
+        "valid_state_transitions": true
+      },
+      "variants": {
+        "standard": {
+          "policy": {
+            "stall_window_ticks": 8,
+            "min_progress_mm": 1
+          },
+          "expected_outcomes": {
+            "42": "completed",
+            "1337": "completed",
+            "2026": "completed"
+          }
+        },
+        "short-stall": {
+          "policy": {
+            "stall_window_ticks": 4,
+            "min_progress_mm": 1
+          },
+          "expected_outcomes": {
+            "42": "completed",
+            "1337": "completed",
+            "2026": "completed"
+          }
+        }
+      }
+    },
+    {
+      "name": "g-zone-fault",
+      "file": "g-zone-fault.json",
+      "expected_status": "invariant_failed",
+      "expected_invariants": {
+        "restricted_zone": false,
+        "world_bounds": true,
+        "safe_fallback": true,
+        "valid_state_transitions": true
+      },
+      "variants": {
+        "standard": {
+          "policy": {
+            "stall_window_ticks": 8,
+            "min_progress_mm": 1
+          },
+          "expected_outcomes": {
+            "42": "incomplete",
+            "1337": "incomplete",
+            "2026": "incomplete"
+          }
+        },
+        "short-stall": {
+          "policy": {
+            "stall_window_ticks": 4,
+            "min_progress_mm": 1
+          },
+          "expected_outcomes": {
+            "42": "incomplete",
+            "1337": "incomplete",
+            "2026": "incomplete"
+          }
+        }
+      },
+      "matched_baseline": "f-zone-nominal",
+      "expected_primary_invariant": "restricted_zone",
+      "requires_observation_discrepancy": true
+    },
+    {
+      "name": "h-bounds-nominal",
+      "file": "h-bounds-nominal.json",
+      "expected_status": "passed",
+      "expected_invariants": {
+        "restricted_zone": true,
+        "world_bounds": true,
+        "safe_fallback": true,
+        "valid_state_transitions": true
+      },
+      "variants": {
+        "standard": {
+          "policy": {
+            "stall_window_ticks": 8,
+            "min_progress_mm": 1
+          },
+          "expected_outcomes": {
+            "42": "completed",
+            "1337": "completed",
+            "2026": "completed"
+          }
+        },
+        "short-stall": {
+          "policy": {
+            "stall_window_ticks": 4,
+            "min_progress_mm": 1
+          },
+          "expected_outcomes": {
+            "42": "completed",
+            "1337": "completed",
+            "2026": "completed"
+          }
+        }
+      }
+    },
+    {
+      "name": "i-bounds-fault",
+      "file": "i-bounds-fault.json",
+      "expected_status": "invariant_failed",
+      "expected_invariants": {
+        "restricted_zone": true,
+        "world_bounds": false,
+        "safe_fallback": true,
+        "valid_state_transitions": true
+      },
+      "variants": {
+        "standard": {
+          "policy": {
+            "stall_window_ticks": 8,
+            "min_progress_mm": 1
+          },
+          "expected_outcomes": {
+            "42": "incomplete",
+            "1337": "incomplete",
+            "2026": "incomplete"
+          }
+        },
+        "short-stall": {
+          "policy": {
+            "stall_window_ticks": 4,
+            "min_progress_mm": 1
+          },
+          "expected_outcomes": {
+            "42": "incomplete",
+            "1337": "incomplete",
+            "2026": "incomplete"
+          }
+        }
+      },
+      "matched_baseline": "h-bounds-nominal",
+      "expected_primary_invariant": "world_bounds",
+      "requires_observation_discrepancy": true
+    },
+    {
+      "name": "j-invalid-transition",
+      "file": "j-invalid-transition.json",
+      "expected_status": "invariant_failed",
+      "expected_invariants": {
+        "restricted_zone": true,
+        "world_bounds": true,
+        "safe_fallback": true,
+        "valid_state_transitions": false
+      },
+      "variants": {
+        "standard": {
+          "policy": {
+            "stall_window_ticks": 8,
+            "min_progress_mm": 1
+          },
+          "expected_outcomes": {
+            "42": "invalid_terminated",
+            "1337": "invalid_terminated",
+            "2026": "invalid_terminated"
+          }
+        },
+        "short-stall": {
+          "policy": {
+            "stall_window_ticks": 4,
+            "min_progress_mm": 1
+          },
+          "expected_outcomes": {
+            "42": "invalid_terminated",
+            "1337": "invalid_terminated",
+            "2026": "invalid_terminated"
+          }
+        }
+      },
+      "expected_primary_invariant": "valid_state_transitions"
+    }
+  ]
+}
