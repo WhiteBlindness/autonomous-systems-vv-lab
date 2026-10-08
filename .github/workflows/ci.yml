@@ -51,25 +51,40 @@ jobs:
       - name: Run Rust integration tests
         run: cargo test --locked --all-targets
 
+      - name: Run Rust documentation tests
+        run: cargo test --locked --doc
+
       - name: Enforce coverage threshold
         if: runner.os == 'Linux'
         run: cargo llvm-cov --locked --all-targets --fail-under-lines 80
 
-      - name: Test campaign validation
-        run: python -m unittest discover -s tests -p "test_*.py"
-
       - name: Build release binary
         run: cargo build --locked --release
 
+      - name: Test Python campaign and minimizer
+        env:
+          VV_LAB_BINARY: target/release/vv-lab${{ matrix.exe_suffix }}
+        run: python -m unittest discover -s tests -p "test_*.py"
+
       - name: Run deterministic scenario campaign
-        run: python scripts/run_campaign.py --binary target/release/vv-lab${{ matrix.exe_suffix }} --seeds 42,1337 --output-root runs/ci-${{ runner.os }}
+        run: python scripts/run_campaign.py --binary target/release/vv-lab${{ matrix.exe_suffix }} --suite all --variants standard,short-stall,fault-stress --seeds 42,1337 --max-runs 256 --max-cases 80 --max-artifact-bytes 67108864 --time-budget-seconds 120 --output-root runs/ci-${{ runner.os }}
+
+      - name: Minimize the seeded natural sensor fault
+        env:
+          VV_LAB_BINARY: target/release/vv-lab${{ matrix.exe_suffix }}
+        run: python scripts/minimize_failure.py scenarios/m2/g-zone-fault.json --seed 42 --output runs/ci-minimized --max-candidates 80 --time-budget-seconds 30
+
+      - name: Replay the minimized event artifact
+        run: target/release/vv-lab${{ matrix.exe_suffix }} replay runs/ci-minimized/final/events.json
 
       - name: Upload campaign artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ${{ runner.os }}-campaign
-          path: runs/ci-${{ runner.os }}/campaign-*
+          path: |
+            runs/ci-${{ runner.os }}/campaign-*
+            runs/ci-minimized
           if-no-files-found: warn
 
     defaults:

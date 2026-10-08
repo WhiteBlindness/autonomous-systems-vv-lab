@@ -4,7 +4,7 @@
 
 Este laboratório verifica missões de um veículo autónomo terrestre genérico, sem armamento. Rust implementa a simulação, os sensores, as falhas, os invariantes e a reprodução de eventos. Python serve apenas para campanhas limitadas e análise.
 
-Manter um pacote Rust pequeno. Interfaces distribuídas, visualização, controlo de equipamento e modelos físicos complexos ficam fora do M1.
+Manter um pacote Rust pequeno. Interfaces distribuídas, visualização, controlo de equipamento e modelos físicos complexos ficam fora do M1 e do M2.
 
 ## Contrato de determinismo
 
@@ -24,11 +24,14 @@ Antes de concluir alterações, executar:
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
+python -m unittest discover -s tests -p "test_*.py"
 cargo build --release
 python scripts/run_campaign.py --seeds 42,1337,2026 --output-root runs/campaign
 ```
 
 Executar também os cenários e a campanha documentados no README. Uma violação deliberada é um resultado esperado do cenário, não uma licença para ignorar falhas dos testes. Acrescentar testes de regressão para alterações de geometria, confiança, ordem dos eventos e reprodução.
+
+Preservar os hashes canónicos do M1. O resultado da missão fica separado dos invariantes de segurança. Uma redução de cenário só pode ser aceite se conservar a identidade da falha, a semente e os critérios de progresso relevantes. Limitar candidatos, duração e artefactos das campanhas e da minimização.
 
 ## Apresentação pública
 

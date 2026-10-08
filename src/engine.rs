@@ -1,17 +1,20 @@
 use std::collections::BTreeMap;
 
 use crate::artifact::{ExogenousTick, GpsExogenous, PacketExogenous, Recorder};
-use crate::controller::{choose_action, control_context, update_mission, update_safety};
+use crate::controller::{
+    ControllerInput, ControllerState, TransitionIntent, choose_action, update_mission,
+    update_safety,
+};
 use crate::error::LabError;
 use crate::model::{
-    EventPayload, MissionState, ObservedTelemetry, Point, RunReport, SCHEMA_VERSION, SafetyState,
-    Scenario, TickTelemetry, ValidationMutant,
+    EventPayload, MissionState, ObservedTelemetry, Point, RunReport, SCHEMA_VERSION, Scenario,
+    TickTelemetry, TransitionReport, ValidationMutant,
 };
 use crate::prng::XorShift64Star;
 use crate::verifier::{InvariantTracker, finalize_results, run_status, verify_tick};
 
 #[derive(Clone, Debug)]
-pub(crate) struct PendingPacket {
+struct PendingPacket {
     packet_sequence: u64,
     sample_tick: u32,
     due_tick: u32,
@@ -20,23 +23,20 @@ pub(crate) struct PendingPacket {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct AcceptedObservation {
+struct AcceptedObservation {
     position: Point,
     sample_tick: u32,
     base_confidence_permille: u16,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct RunState {
-    pub(crate) truth: Point,
-    pub(crate) heading: crate::model::Heading,
-    pub(crate) mission_state: MissionState,
-    pub(crate) safety_state: SafetyState,
-    pub(crate) waypoint_index: usize,
+struct RunState {
+    truth: Point,
+    heading: crate::model::Heading,
+    controller: ControllerState,
     observation: Option<AcceptedObservation>,
     pending_packets: Vec<PendingPacket>,
     low_confidence_streak: u32,
-    pub(crate) recovery_streak: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -55,13 +55,10 @@ pub(crate) fn execute(
     let mut state = RunState {
         truth: scenario.vehicle.start,
         heading: scenario.vehicle.heading,
-        mission_state: MissionState::Pending,
-        safety_state: SafetyState::Nominal,
-        waypoint_index: 0,
+        controller: ControllerState::new(),
         observation: None,
         pending_packets: Vec::new(),
         low_confidence_streak: 0,
-        recovery_streak: 0,
     };
     let mut tracker = InvariantTracker::new(scenario.steps);
 
@@ -96,38 +93,62 @@ pub(crate) fn execute(
         };
 
         let mut transition_sequences = Vec::new();
-        update_mission(
-            scenario,
-            tick,
+        let mission_transitions = update_mission(
+            &scenario.mission,
+            scenario.safety.confidence_threshold_permille,
+            scenario
+                .validation_mutants
+                .contains(&ValidationMutant::InvalidMissionTransition),
             observed.as_ref(),
-            &mut state,
-            &mut recorder,
-            &mut tracker,
-            &mut transition_sequences,
+            &mut state.controller,
         );
-        let control = control_context(
-            scenario,
-            state.mission_state,
-            state.waypoint_index,
-            observed.as_ref(),
-        );
+        for transition in mission_transitions {
+            transition_sequences.push(record_transition_intent(
+                &mut recorder,
+                &mut tracker,
+                tick,
+                transition,
+            ));
+        }
+        let target = if state.controller.mission_state == MissionState::Completed {
+            None
+        } else {
+            scenario
+                .mission
+                .waypoints
+                .get(state.controller.waypoint_index)
+                .copied()
+        };
         let watchdog_required = state.low_confidence_streak >= scenario.safety.fallback_after_ticks;
         let fallback_disabled = scenario
             .validation_mutants
             .contains(&ValidationMutant::DisableSafetyFallback);
         if !fallback_disabled {
-            update_safety(
-                scenario,
-                tick,
+            let safety_transitions = update_safety(
+                scenario.safety.recovery_after_ticks,
                 low_confidence,
                 watchdog_required,
-                &mut state,
-                &mut recorder,
-                &mut tracker,
-                &mut transition_sequences,
+                &mut state.controller,
             );
+            for transition in safety_transitions {
+                transition_sequences.push(record_transition_intent(
+                    &mut recorder,
+                    &mut tracker,
+                    tick,
+                    transition,
+                ));
+            }
         }
-        let action = choose_action(scenario, &state, observed.as_ref(), &control);
+        let controller_input = ControllerInput {
+            mission_state: state.controller.mission_state,
+            safety_state: state.controller.safety_state,
+            observed: observed.as_ref(),
+            target,
+            step_mm: scenario.vehicle.step_mm,
+            bounds: &scenario.bounds,
+            confidence_threshold_permille: scenario.safety.confidence_threshold_permille,
+        };
+        let action = choose_action(&controller_input);
         let truth_from = state.truth;
         state.truth = match action.heading {
             Some(heading) => state.truth.translated(heading, action.distance_mm),
@@ -147,9 +168,9 @@ pub(crate) fn execute(
             low_confidence_streak_ticks: state.low_confidence_streak,
             low_confidence_watchdog_required: watchdog_required,
             heading: state.heading,
-            mission_state: state.mission_state,
-            safety_state: state.safety_state,
-            waypoint_index: state.waypoint_index,
+            mission_state: state.controller.mission_state,
+            safety_state: state.controller.safety_state,
+            waypoint_index: state.controller.waypoint_index,
             action,
         };
         let tick_result_sequence = recorder.push(
@@ -159,9 +180,9 @@ pub(crate) fn execute(
                 truth_position: state.truth,
                 observed: observed.clone(),
                 heading: state.heading,
-                mission_state: state.mission_state,
-                safety_state: state.safety_state,
-                waypoint_index: state.waypoint_index,
+                mission_state: state.controller.mission_state,
+                safety_state: state.controller.safety_state,
+                waypoint_index: state.controller.waypoint_index,
                 action,
             },
         );
@@ -173,8 +194,8 @@ pub(crate) fn execute(
             observed.as_ref(),
             confidence,
             watchdog_required,
-            state.mission_state,
-            state.safety_state,
+            state.controller.mission_state,
+            state.controller.safety_state,
             action,
             tick_result_sequence,
             &transition_sequences,
@@ -392,6 +413,31 @@ fn append_exogenous(recorder: &mut Recorder, tick: u32, exogenous: &ExogenousTic
             due_tick: exogenous.packet.due_tick,
         },
     );
+}
+
+fn record_transition_intent(
+    recorder: &mut Recorder,
+    tracker: &mut InvariantTracker,
+    tick: u32,
+    transition: TransitionIntent,
+) -> u64 {
+    let sequence = recorder.push(
+        tick,
+        EventPayload::Transition {
+            subsystem: transition.subsystem.clone(),
+            from: transition.from.clone(),
+            to: transition.to.clone(),
+            reason: transition.reason.clone(),
+        },
+    );
+    tracker.transitions.push(TransitionReport {
+        tick,
+        subsystem: transition.subsystem,
+        from: transition.from,
+        to: transition.to,
+        reason: transition.reason,
+    });
+    sequence
 }
 
 fn enqueue_packet(queue: &mut Vec<PendingPacket>, tick: u32, exogenous: &ExogenousTick) {

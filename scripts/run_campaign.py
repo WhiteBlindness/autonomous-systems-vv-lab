@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import subprocess
 import sys
@@ -13,6 +14,23 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from m2_campaign import (
+    M2CampaignError,
+    check_mission_sidecar,
+    fixture_checksums as m2_fixture_checksums,
+    load_m2_manifest,
+    matched_geometry_errors,
+    mission_metrics,
+    observation_discrepancy,
+    scenario_for_variant,
+    select_variant,
+)
+from process_limits import (
+    CampaignArtifactBudget,
+    ProcessLimitError,
+    run_bounded_process,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -68,6 +86,8 @@ EXPECTED_INVARIANTS = {
     },
 }
 DEFAULT_SEEDS = (42, 1337, 2026)
+DEFAULT_VARIANTS = ("standard", "short-stall", "fault-stress")
+MAX_PROCESS_OUTPUT_BYTES = 64 * 1024
 
 
 class CampaignError(Exception):
@@ -89,6 +109,13 @@ def parse_seeds(value: str) -> tuple[int, ...]:
 
 
 def binary_default() -> Path:
+    configured = (
+        os.environ.get("VV_LAB_BINARY")
+        or os.environ.get("CARGO_BIN_EXE_VV_LAB")
+        or os.environ.get("CARGO_BIN_EXE_vv-lab")
+    )
+    if configured:
+        return Path(configured)
     suffix = ".exe" if os.name == "nt" else ""
     return ROOT / "target" / "release" / f"vv-lab{suffix}"
 
@@ -108,7 +135,7 @@ def verify_fixture_checksums() -> dict[str, str]:
         try:
             contents = scenario_path.read_bytes().replace(b"\r\n", b"\n")
         except OSError as error:
-            raise CampaignError(f"cannot read scenario fixture {scenario_path}: {error}") from error
+            raise CampaignError(f"cannot read scenario fixture {scenario_path.name}: {error}") from error
         digest = hashlib.sha256(contents).hexdigest()
         actual[name] = digest
         if manifest[name] != digest:
@@ -197,9 +224,9 @@ def summarize_invariants(
     }
     for case in cases:
         actual = case.get("invariants", {})
-        expected = case.get(
-            "expected_invariants", EXPECTED_INVARIANTS[case["scenario"]]
-        )
+        expected = case.get("expected_invariants")
+        if expected is None:
+            expected = EXPECTED_INVARIANTS.get(case["scenario"], {})
         for name in INVARIANT_NAMES:
             if name not in actual:
                 continue
@@ -215,6 +242,7 @@ def summarize_invariants(
                 failures_by_invariant[name].append(
                     {
                         "scenario": case["scenario"],
+                        "variant": case.get("variant"),
                         "seed": case["seed"],
                         "expected_failure": expected_failure,
                         "evidence": case.get("invariant_failure_evidence", {}).get(name, []),
@@ -228,24 +256,61 @@ def load_json(path: Path, description: str) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
-        raise CampaignError(f"cannot read {description} at {path}: {error}") from error
+        raise CampaignError(f"cannot read {description} at {path.name}: {error}") from error
     if not isinstance(value, dict):
         raise CampaignError(f"{description} at {path} must be a JSON object")
     return value
 
 
-def run_process(command: list[str], description: str) -> subprocess.CompletedProcess[str]:
+def run_process(
+    command: list[str],
+    description: str,
+    *,
+    timeout_seconds: float = 30,
+    max_output_bytes: int = MAX_PROCESS_OUTPUT_BYTES,
+) -> subprocess.CompletedProcess[str]:
     try:
-        return subprocess.run(
+        return run_bounded_process(
             command,
             cwd=ROOT,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=30,
+            timeout_seconds=timeout_seconds,
+            max_output_bytes=max_output_bytes,
+            description=description,
         )
-    except (OSError, subprocess.TimeoutExpired) as error:
+    except ProcessLimitError as error:
         raise CampaignError(f"{description} could not complete: {error}") from error
+
+
+def counted_process(
+    command: list[str],
+    description: str,
+    kind: str,
+    counts: dict[str, dict[str, int]],
+    *,
+    timeout_seconds: float,
+) -> subprocess.CompletedProcess[str]:
+    counts[kind]["attempted"] += 1
+    result = run_process(command, description, timeout_seconds=timeout_seconds)
+    counts[kind]["completed"] += 1
+    return result
+
+
+def remaining_time(deadline: float, maximum: float = 30) -> float:
+    return min(maximum, deadline - time.monotonic())
+
+
+def campaign_size(budget: CampaignArtifactBudget, case_dir: Path) -> int:
+    try:
+        return budget.refresh(case_dir)
+    except ProcessLimitError as error:
+        raise CampaignError(str(error)) from error
+
+
+def portable_path(path: Path, root: Path) -> str:
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return path.name
 
 
 def unique_campaign_dir(base: Path) -> Path:
@@ -267,6 +332,10 @@ def execute_case(
     scenario_name: str,
     seed: int,
     canonical_hashes: dict[str, dict[str, str]],
+    *,
+    deadline: float,
+    artifact_budget: CampaignArtifactBudget,
+    command_counts: dict[str, dict[str, int]],
 ) -> dict[str, Any]:
     started = time.monotonic()
     expected = EXPECTED_STATUS[scenario_name]
@@ -276,39 +345,57 @@ def execute_case(
     second_dir = case_dir / "repeat"
     case_dir.mkdir(parents=True, exist_ok=False)
 
-    command = [
-        str(binary),
+    def run_command(output_dir: Path) -> list[str]:
+        remaining = artifact_budget.remaining(case_dir)
+        if remaining < 1:
+            raise CampaignError("campaign reached the artifact byte limit")
+        return [
+            str(binary),
+            "run",
+            str(fixture_path),
+            "--seed",
+            str(seed),
+            "--output",
+            str(output_dir),
+            "--max-output-bytes",
+            str(remaining),
+        ]
+
+    first = counted_process(
+        run_command(first_dir),
+        f"run {scenario_name} with seed {seed}",
         "run",
-        str(fixture_path),
-        "--seed",
-        str(seed),
-        "--output",
-        str(first_dir),
-    ]
-    first = run_process(command, f"run {scenario_name} with seed {seed}")
+        command_counts,
+        timeout_seconds=remaining_time(deadline),
+    )
+    campaign_size(artifact_budget, case_dir)
     report_path = first_dir / "report.json"
     artifact_path = first_dir / "events.json"
+    mission_path = first_dir / "mission.json"
     report = load_json(report_path, "run report")
     artifact = load_json(artifact_path, "event artifact")
+    mission = load_json(mission_path, "mission analysis")
     expected_invariants = EXPECTED_INVARIANTS[scenario_name]
     errors = check_run_result(
         first.returncode, report, artifact, expected, expected_invariants
     )
+    mission_policy = {"stall_window_ticks": 8, "min_progress_mm": 1}
+    errors.extend(check_mission_sidecar(mission, artifact, report, mission_policy, None))
 
-    repeat_command = [
-        str(binary),
+    repeated = counted_process(
+        run_command(second_dir),
+        f"repeat {scenario_name} with seed {seed}",
         "run",
-        str(fixture_path),
-        "--seed",
-        str(seed),
-        "--output",
-        str(second_dir),
-    ]
-    repeated = run_process(repeat_command, f"repeat {scenario_name} with seed {seed}")
+        command_counts,
+        timeout_seconds=remaining_time(deadline),
+    )
+    campaign_size(artifact_budget, case_dir)
     repeated_report_path = second_dir / "report.json"
     repeated_artifact_path = second_dir / "events.json"
+    repeated_mission_path = second_dir / "mission.json"
     repeated_report = load_json(repeated_report_path, "repeat report")
     repeated_artifact = load_json(repeated_artifact_path, "repeat event artifact")
+    repeated_mission = load_json(repeated_mission_path, "repeat mission analysis")
     errors.extend(
         check_run_result(
             repeated.returncode,
@@ -318,9 +405,15 @@ def execute_case(
             expected_invariants,
         )
     )
+    errors.extend(
+        check_mission_sidecar(
+            repeated_mission, repeated_artifact, repeated_report, mission_policy, None
+        )
+    )
     deterministic = (
         report_path.read_bytes() == repeated_report_path.read_bytes()
         and artifact_path.read_bytes() == repeated_artifact_path.read_bytes()
+        and mission_path.read_bytes() == repeated_mission_path.read_bytes()
     )
     if not deterministic:
         errors.append("same scenario and seed produced different canonical bytes")
@@ -331,9 +424,12 @@ def execute_case(
     if seed == 42 and output_hashes != canonical_hashes[scenario_name]:
         errors.append("seed 42 output differs from the pinned canonical hashes")
 
-    replayed = run_process(
+    replayed = counted_process(
         [str(binary), "replay", str(artifact_path)],
         f"replay {scenario_name} with seed {seed}",
+        "replay",
+        command_counts,
+        timeout_seconds=remaining_time(deadline),
     )
     if replayed.returncode != 0:
         errors.append(f"replay returned exit code {replayed.returncode}")
@@ -347,12 +443,16 @@ def execute_case(
         if result.get("passed") is False
     }
     return {
+        "suite": "m1",
         "scenario": scenario_name,
+        "variant": "default",
         "seed": seed,
         "expected_status": expected,
         "actual_status": report.get("status"),
         "expected_invariants": expected_invariants,
         "invariants": actual_invariants,
+        "mission_metrics": mission_metrics(mission),
+        "expected_outcome": None,
         "invariant_failure_evidence": invariant_evidence,
         "canonical_output_sha256": output_hashes,
         "run_exit_code": first.returncode,
@@ -363,96 +463,307 @@ def execute_case(
         "errors": errors,
         "elapsed_seconds": round(time.monotonic() - started, 4),
         "output_paths": {
-            "events": str(artifact_path),
-            "report": str(report_path),
-            "repeat_events": str(repeated_artifact_path),
-            "repeat_report": str(repeated_report_path),
+            "events": portable_path(artifact_path, campaign_dir),
+            "report": portable_path(report_path, campaign_dir),
+            "mission": portable_path(mission_path, campaign_dir),
+            "repeat_events": portable_path(repeated_artifact_path, campaign_dir),
+            "repeat_report": portable_path(repeated_report_path, campaign_dir),
+            "repeat_mission": portable_path(repeated_mission_path, campaign_dir),
         },
     }
+
+
+def execute_m2_case(
+    binary: Path,
+    campaign_dir: Path,
+    entry: dict[str, Any],
+    variant_name: str,
+    seed: int,
+    policy: dict[str, int],
+    expected_outcome: str,
+    scenario_overrides: dict[str, int],
+    *,
+    deadline: float,
+    artifact_budget: CampaignArtifactBudget,
+    command_counts: dict[str, dict[str, int]],
+) -> dict[str, Any]:
+    started = time.monotonic()
+    scenario_name = entry["name"]
+    fixture_path = ROOT / "scenarios" / "m2" / entry["file"]
+    case_dir = campaign_dir / scenario_name / variant_name / f"seed-{seed}"
+    first_dir = case_dir / "first"
+    second_dir = case_dir / "repeat"
+    analysis_dir = case_dir / "analysis"
+    case_dir.mkdir(parents=True, exist_ok=False)
+    scenario_data = scenario_for_variant(entry, scenario_overrides)
+    scenario_bytes = (json.dumps(scenario_data, indent=2, sort_keys=True) + "\n").encode(
+        "utf-8"
+    )
+    scenario_copy = case_dir / "scenario.json"
+    scenario_copy.write_bytes(scenario_bytes)
+    policy_args = [
+        "--stall-window-ticks",
+        str(policy["stall_window_ticks"]),
+        "--min-progress-mm",
+        str(policy["min_progress_mm"]),
+    ]
+
+    def run_args(output_dir: Path) -> list[str]:
+        remaining = artifact_budget.remaining(case_dir)
+        if remaining < 1:
+            raise CampaignError("campaign reached the artifact byte limit")
+        return [
+            str(binary),
+            "run",
+            str(scenario_copy),
+            "--seed",
+            str(seed),
+            "--output",
+            str(output_dir),
+            *policy_args,
+            "--max-output-bytes",
+            str(remaining),
+        ]
+
+    first = counted_process(
+        run_args(first_dir),
+        f"run {scenario_name}/{variant_name}, seed {seed}",
+        "run",
+        command_counts,
+        timeout_seconds=remaining_time(deadline),
+    )
+    campaign_size(artifact_budget, case_dir)
+    report_path = first_dir / "report.json"
+    artifact_path = first_dir / "events.json"
+    mission_path = first_dir / "mission.json"
+    report = load_json(report_path, "relatório M2")
+    artifact = load_json(artifact_path, "artefacto de eventos M2")
+    mission = load_json(mission_path, "análise da missão")
+
+    from m2_campaign import M2_INVARIANT_NAMES
+
+    errors = check_run_result(
+        first.returncode,
+        report,
+        artifact,
+        entry["expected_status"],
+        entry["expected_invariants"],
+    )
+    errors.extend(
+        check_mission_sidecar(mission, artifact, report, policy, expected_outcome)
+    )
+    actual_invariants = {
+        result["name"]: result["passed"]
+        for result in report.get("invariants", [])
+        if isinstance(result, dict) and result.get("name") in M2_INVARIANT_NAMES
+    }
+    primary_invariant = entry.get("expected_primary_invariant")
+    if primary_invariant:
+        failed = [name for name, passed in actual_invariants.items() if not passed]
+        if failed != [primary_invariant]:
+            errors.append(
+                f"expected only {primary_invariant} to fail, received {failed}"
+            )
+    if entry.get("requires_observation_discrepancy") and primary_invariant:
+        if not observation_discrepancy(report, artifact, primary_invariant):
+            errors.append(
+                f"{primary_invariant} failure has no sensor-to-truth discrepancy evidence"
+            )
+
+    repeat = counted_process(
+        run_args(second_dir),
+        f"repeat {scenario_name}/{variant_name}, seed {seed}",
+        "run",
+        command_counts,
+        timeout_seconds=remaining_time(deadline),
+    )
+    campaign_size(artifact_budget, case_dir)
+    repeated_report_path = second_dir / "report.json"
+    repeated_artifact_path = second_dir / "events.json"
+    repeated_mission_path = second_dir / "mission.json"
+    repeated_report = load_json(repeated_report_path, "relatório repetido M2")
+    repeated_artifact = load_json(repeated_artifact_path, "eventos repetidos M2")
+    repeated_mission = load_json(repeated_mission_path, "análise repetida da missão")
+    errors.extend(
+        check_run_result(
+            repeat.returncode,
+            repeated_report,
+            repeated_artifact,
+            entry["expected_status"],
+            entry["expected_invariants"],
+        )
+    )
+    errors.extend(
+        check_mission_sidecar(
+            repeated_mission,
+            repeated_artifact,
+            repeated_report,
+            policy,
+            expected_outcome,
+        )
+    )
+    deterministic = (
+        report_path.read_bytes() == repeated_report_path.read_bytes()
+        and artifact_path.read_bytes() == repeated_artifact_path.read_bytes()
+        and mission_path.read_bytes() == repeated_mission_path.read_bytes()
+    )
+    if not deterministic:
+        errors.append("a repetição produziu bytes diferentes para a mesma entrada")
+
+    replayed = counted_process(
+        [str(binary), "replay", str(artifact_path)],
+        f"replay {scenario_name}/{variant_name}, seed {seed}",
+        "replay",
+        command_counts,
+        timeout_seconds=remaining_time(deadline),
+    )
+    if replayed.returncode != 0:
+        errors.append(f"replay terminou com o código {replayed.returncode}")
+
+    analysis_dir.mkdir(parents=True, exist_ok=False)
+    analysis_path = analysis_dir / "mission.json"
+    remaining = artifact_budget.remaining(case_dir)
+    if remaining < 1:
+        raise CampaignError("campaign reached the artifact byte limit")
+    analyzed = counted_process(
+        [
+            str(binary),
+            "analyze",
+            str(artifact_path),
+            "--output",
+            str(analysis_path),
+            *policy_args,
+            "--max-output-bytes",
+            str(remaining),
+        ],
+        f"analyze {scenario_name}/{variant_name}, seed {seed}",
+        "analyze",
+        command_counts,
+        timeout_seconds=remaining_time(deadline),
+    )
+    campaign_size(artifact_budget, case_dir)
+    if analyzed.returncode != 0:
+        errors.append(f"analyze terminou com o código {analyzed.returncode}")
+    analyzed_mission = load_json(analysis_path, "resultado de analyze")
+    errors.extend(
+        check_mission_sidecar(
+            analyzed_mission,
+            artifact,
+            report,
+            policy,
+            expected_outcome,
+        )
+    )
+    analysis_matches = mission_path.read_bytes() == analysis_path.read_bytes()
+    if not analysis_matches:
+        errors.append("analyze não reproduziu os mesmos bytes de mission.json")
+
+    output_hashes = {
+        "scenario_sha256": hashlib.sha256(scenario_bytes).hexdigest(),
+        "events_sha256": hashlib.sha256(artifact_path.read_bytes()).hexdigest(),
+        "report_sha256": hashlib.sha256(report_path.read_bytes()).hexdigest(),
+        "mission_sha256": hashlib.sha256(mission_path.read_bytes()).hexdigest(),
+    }
+    invariant_evidence = {
+        result["name"]: result.get("failures", [])
+        for result in report.get("invariants", [])
+        if isinstance(result, dict) and result.get("passed") is False
+    }
+    return {
+        "suite": "m2",
+        "scenario": scenario_name,
+        "variant": variant_name,
+        "seed": seed,
+        "policy": policy,
+        "expected_status": entry["expected_status"],
+        "actual_status": report.get("status"),
+        "expected_outcome": expected_outcome,
+        "mission_metrics": mission_metrics(mission),
+        "expected_invariants": entry["expected_invariants"],
+        "invariants": actual_invariants,
+        "invariant_failure_evidence": invariant_evidence,
+        "canonical_output_sha256": output_hashes,
+        "run_exit_code": first.returncode,
+        "repeat_exit_code": repeat.returncode,
+        "replay_exit_code": replayed.returncode,
+        "analyze_exit_code": analyzed.returncode,
+        "deterministic": deterministic,
+        "analysis_matches_run": analysis_matches,
+        "result": "passed" if not errors else "failed",
+        "errors": errors,
+        "elapsed_seconds": round(time.monotonic() - started, 4),
+        "output_paths": {
+            "scenario": portable_path(scenario_copy, campaign_dir),
+            "events": portable_path(artifact_path, campaign_dir),
+            "report": portable_path(report_path, campaign_dir),
+            "mission": portable_path(mission_path, campaign_dir),
+            "repeat_events": portable_path(repeated_artifact_path, campaign_dir),
+            "repeat_report": portable_path(repeated_report_path, campaign_dir),
+            "repeat_mission": portable_path(repeated_mission_path, campaign_dir),
+            "analyzed_mission": portable_path(analysis_path, campaign_dir),
+        },
+    }
+def parse_variants(value: str) -> tuple[str, ...]:
+    variants = tuple(part.strip() for part in value.split(","))
+    if not variants or any(not name for name in variants):
+        raise argparse.ArgumentTypeError("variants must be comma-separated names")
+    if len(set(variants)) != len(variants):
+        raise argparse.ArgumentTypeError("variants must not contain duplicates")
+    if len(variants) > 16:
+        raise argparse.ArgumentTypeError("campaigns are limited to 16 variants")
+    return variants
+
+
+def parse_positive_int(value: str) -> int:
+    try:
+        parsed = int(value, 10)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("value must be an integer") from error
+    if parsed < 1 or parsed > 10000:
+        raise argparse.ArgumentTypeError("value must be between 1 and 10000")
+    return parsed
+
+
+def parse_positive_bytes(value: str) -> int:
+    try:
+        parsed = int(value, 10)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("artifact limit must be an integer") from error
+    if parsed < 1 or parsed > 2 * 1024 * 1024 * 1024:
+        raise argparse.ArgumentTypeError("artifact limit must be between 1 and 2 GiB")
+    return parsed
+
+
+def parse_time_budget(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("time budget must be a number") from error
+    if not math.isfinite(parsed) or parsed <= 0 or parsed > 3600:
+        raise argparse.ArgumentTypeError("time budget must be between 0 and 3600 seconds")
+    return parsed
 
 
 def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, default=binary_default())
     parser.add_argument("--seeds", type=parse_seeds, default=DEFAULT_SEEDS)
+    parser.add_argument("--suite", choices=("m1", "m2", "all"), default="all")
+    parser.add_argument("--variants", type=parse_variants, default=DEFAULT_VARIANTS)
+    parser.add_argument("--m2-scenarios", type=parse_variants)
+    parser.add_argument("--max-runs", type=parse_positive_int, default=1000)
+    parser.add_argument("--max-cases", type=parse_positive_int, default=256)
+    parser.add_argument("--max-artifact-bytes", type=parse_positive_bytes, default=256 * 1024 * 1024)
+    parser.add_argument("--time-budget-seconds", type=parse_time_budget, default=600)
     parser.add_argument("--output-root", type=Path, default=ROOT / "runs")
     return parser
 
 
 def main() -> int:
     args = make_parser().parse_args()
-    campaign_started = time.monotonic()
-    binary = args.binary if args.binary.is_absolute() else ROOT / args.binary
-    binary = binary.resolve()
-    try:
-        if not binary.is_file():
-            raise CampaignError(f"compiled vv-lab binary not found: {binary}")
-        checksums = verify_fixture_checksums()
-        canonical_hashes = load_canonical_output_hashes()
-        output_root = args.output_root if args.output_root.is_absolute() else ROOT / args.output_root
-        campaign_dir = unique_campaign_dir(output_root.resolve())
-        cases = []
-        for seed in args.seeds:
-            for name in EXPECTED_STATUS:
-                try:
-                    case_started = time.monotonic()
-                    case = execute_case(
-                        binary, campaign_dir, name, seed, canonical_hashes
-                    )
-                    cases.append(case)
-                except CampaignError as error:
-                    cases.append(
-                        {
-                            "scenario": name,
-                            "seed": seed,
-                            "expected_status": EXPECTED_STATUS[name],
-                            "result": "failed",
-                            "errors": [str(error)],
-                            "elapsed_seconds": round(time.monotonic() - case_started, 4),
-                        }
-                    )
-        failed = sum(case["result"] != "passed" for case in cases)
-        invariant_counts, failures_by_invariant = summarize_invariants(cases)
-        output_fingerprints = [
-            {
-                "scenario": case["scenario"],
-                "seed": case["seed"],
-                **case["canonical_output_sha256"],
-            }
-            for case in cases
-            if "canonical_output_sha256" in case
-        ]
-        fingerprints = {
-            "schema_version": 1,
-            "fixture_checksums_sha256": checksums,
-            "outputs": output_fingerprints,
-        }
-        (campaign_dir / "fingerprints.json").write_text(
-            json.dumps(fingerprints, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
-        summary = {
-            "status": "failed" if failed else "passed",
-            "binary": str(binary),
-            "seeds": list(args.seeds),
-            "case_count": len(cases),
-            "passed_cases": len(cases) - failed,
-            "failed_cases": failed,
-            "elapsed_seconds": round(time.monotonic() - campaign_started, 4),
-            "campaign_directory": str(campaign_dir),
-            "fixture_checksums_sha256": checksums,
-            "invariant_check_counts": invariant_counts,
-            "failures_by_invariant": failures_by_invariant,
-            "cases": cases,
-        }
-        summary_path = campaign_dir / "summary.json"
-        summary_path.write_text(
-            json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
-        print(json.dumps(summary, indent=2, sort_keys=True))
-        return 1 if failed else 0
-    except CampaignError as error:
-        print(json.dumps({"status": "failed", "error": str(error)}, indent=2))
-        return 1
+    from campaign_matrix import run_campaign
+
+    return run_campaign(args)
 
 
 if __name__ == "__main__":

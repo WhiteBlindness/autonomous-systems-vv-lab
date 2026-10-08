@@ -1,6 +1,7 @@
 use crate::artifact::{artifact_digest, extract_exogenous, verify_artifact_integrity};
 use crate::engine::execute;
 use crate::error::LabError;
+use crate::mission_analysis::{MissionAnalysis, MissionPolicy, analyze_mission};
 use crate::model::{EventsArtifact, RunStatus, SCHEMA_VERSION, Scenario};
 
 const MAX_SCENARIO_BYTES: usize = 2 * 1024 * 1024;
@@ -43,12 +44,25 @@ pub fn run_scenario(scenario: Scenario, seed: u64) -> Result<EventsArtifact, Lab
 }
 
 pub fn replay_artifact(artifact: EventsArtifact) -> Result<ReplayOutcome, LabError> {
+    let report = recompute_artifact(&artifact)?;
+    Ok(ReplayOutcome { report })
+}
+
+pub fn analyze_artifact(
+    artifact: EventsArtifact,
+    policy: MissionPolicy,
+) -> Result<MissionAnalysis, LabError> {
+    let report = recompute_artifact(&artifact)?;
+    analyze_mission(&artifact.scenario, &report, policy)
+}
+
+fn recompute_artifact(artifact: &EventsArtifact) -> Result<crate::model::RunReport, LabError> {
     artifact
         .scenario
         .validate()
         .map_err(|error| LabError(error.to_string()))?;
-    verify_artifact_integrity(&artifact)?;
-    let exogenous = extract_exogenous(&artifact)?;
+    verify_artifact_integrity(artifact)?;
+    let exogenous = extract_exogenous(artifact)?;
     let replay = execute(&artifact.scenario, artifact.seed, Some(&exogenous))?;
     if replay.events != artifact.events {
         return Err(LabError(
@@ -60,9 +74,7 @@ pub fn replay_artifact(artifact: EventsArtifact) -> Result<ReplayOutcome, LabErr
             "recomputed report differs from expected_report".into(),
         ));
     }
-    Ok(ReplayOutcome {
-        report: replay.report,
-    })
+    Ok(replay.report)
 }
 
 pub fn parse_scenario(text: &str) -> Result<Scenario, LabError> {

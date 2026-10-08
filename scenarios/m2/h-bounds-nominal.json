@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "name": "m2-h-bounds-nominal",
+  "steps": 32,
+  "bounds": {
+    "min_x_mm": 0,
+    "max_x_mm": 5000,
+    "min_y_mm": 0,
+    "max_y_mm": 6000
+  },
+  "restricted_zone": {
+    "vertices": [
+      {
+        "x_mm": 1000,
+        "y_mm": 4000
+      },
+      {
+        "x_mm": 2000,
+        "y_mm": 4000
+      },
+      {
+        "x_mm": 2000,
+        "y_mm": 5000
+      },
+      {
+        "x_mm": 1000,
+        "y_mm": 5000
+      }
+    ]
+  },
+  "vehicle": {
+    "start": {
+      "x_mm": 1000,
+      "y_mm": 2000
+    },
+    "heading": "east",
+    "step_mm": 250
+  },
+  "mission": {
+    "waypoints": [
+      {
+        "x_mm": 5000,
+        "y_mm": 2000
+      }
+    ],
+    "arrival_radius_mm": 0
+  },
+  "sensors": {
+    "gps": {
+      "dropout_windows": [],
+      "dropout_permille": 0,
+      "noise_max_mm": 0
+    },
+    "communication": {
+      "packet_loss_windows": [],
+      "packet_loss_permille": 0,
+      "delay_min_ticks": 0,
+      "delay_max_ticks": 0
+    },
+    "max_observation_age_ticks": 3
+  },
+  "safety": {
+    "confidence_threshold_permille": 0,
+    "fallback_after_ticks": 3,
+    "recovery_after_ticks": 2
+  },
+  "validation_mutants": []
+}
