@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "seed": 1337,
+  "faults": [
+    {
+      "kind": "lost_movement",
+      "id": "intermittent_loss",
+      "windows": [
+        { "start_tick": 3, "end_tick": 4 },
+        { "start_tick": 8, "end_tick": 9 }
+      ],
+      "probability_permille": 1000
+    }
+  ]
+}

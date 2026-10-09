@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "seed": 42,
+  "faults": [
+    {
+      "kind": "delayed_movement",
+      "id": "late_movement",
+      "windows": [{ "start_tick": 4, "end_tick": 4 }],
+      "probability_permille": 1000,
+      "delay_ticks": 3
+    }
+  ]
+}

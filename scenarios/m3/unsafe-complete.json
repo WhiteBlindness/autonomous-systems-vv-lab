@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "name": "m3-unsafe-mission-reaches-destination",
+  "steps": 20,
+  "bounds": {
+    "min_x_mm": 0,
+    "max_x_mm": 10000,
+    "min_y_mm": 0,
+    "max_y_mm": 10000
+  },
+  "restricted_zone": {
+    "vertices": [
+      { "x_mm": 2000, "y_mm": 900 },
+      { "x_mm": 3000, "y_mm": 900 },
+      { "x_mm": 3000, "y_mm": 1100 },
+      { "x_mm": 2000, "y_mm": 1100 }
+    ]
+  },
+  "vehicle": {
+    "start": { "x_mm": 1000, "y_mm": 1000 },
+    "heading": "east",
+    "step_mm": 250
+  },
+  "mission": {
+    "waypoints": [{ "x_mm": 4000, "y_mm": 1000 }],
+    "arrival_radius_mm": 100
+  },
+  "sensors": {
+    "gps": { "dropout_windows": [], "dropout_permille": 0, "noise_max_mm": 0 },
+    "communication": {
+      "packet_loss_windows": [],
+      "packet_loss_permille": 0,
+      "delay_min_ticks": 0,
+      "delay_max_ticks": 0
+    },
+    "max_observation_age_ticks": 1
+  },
+  "validation_mutants": []
+}

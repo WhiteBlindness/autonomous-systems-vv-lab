@@ -714,6 +714,17 @@ def parse_variants(value: str) -> tuple[str, ...]:
     return variants
 
 
+def parse_m3_selection(value: str) -> tuple[str, ...]:
+    names = tuple(part.strip() for part in value.split(","))
+    if not names or any(not name for name in names):
+        raise argparse.ArgumentTypeError("M3 selections must be comma-separated names")
+    if len(set(names)) != len(names):
+        raise argparse.ArgumentTypeError("M3 selections must not contain duplicates")
+    if len(names) > 80:
+        raise argparse.ArgumentTypeError("M3 selections are limited to 80 names")
+    return names
+
+
 def parse_positive_int(value: str) -> int:
     try:
         parsed = int(value, 10)
@@ -748,9 +759,13 @@ def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, default=binary_default())
     parser.add_argument("--seeds", type=parse_seeds, default=DEFAULT_SEEDS)
-    parser.add_argument("--suite", choices=("m1", "m2", "all"), default="all")
+    parser.add_argument("--suite", choices=("m1", "m2", "m3", "all"), default="all")
     parser.add_argument("--variants", type=parse_variants, default=DEFAULT_VARIANTS)
     parser.add_argument("--m2-scenarios", type=parse_variants)
+    parser.add_argument("--m3-manifest", type=Path)
+    parser.add_argument("--m3-contract-sets", type=parse_m3_selection)
+    parser.add_argument("--m3-scenarios", type=parse_m3_selection)
+    parser.add_argument("--m3-fault-combinations", type=parse_m3_selection)
     parser.add_argument("--max-runs", type=parse_positive_int, default=1000)
     parser.add_argument("--max-cases", type=parse_positive_int, default=256)
     parser.add_argument("--max-artifact-bytes", type=parse_positive_bytes, default=256 * 1024 * 1024)
@@ -761,6 +776,15 @@ def make_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = make_parser().parse_args()
+    if args.suite == "m3":
+        from m3_campaign import M3CampaignError, run_campaign as run_m3_campaign
+        from process_limits import ProcessLimitError
+
+        try:
+            return run_m3_campaign(args)
+        except (M3CampaignError, ProcessLimitError) as error:
+            print(f"M3 campaign failed: {error}", file=sys.stderr)
+            return 1
     from campaign_matrix import run_campaign
 
     return run_campaign(args)

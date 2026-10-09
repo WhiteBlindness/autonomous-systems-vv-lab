@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use crate::actuator::{ActuationOutcome, ActuatorConfig, ActuatorModel};
 use crate::artifact::{ExogenousTick, GpsExogenous, PacketExogenous, Recorder};
 use crate::controller::{
     ControllerInput, ControllerState, TransitionIntent, choose_action, update_mission,
@@ -43,6 +44,7 @@ struct RunState {
 pub(crate) struct CoreOutput {
     pub(crate) events: Vec<crate::model::EventRecord>,
     pub(crate) report: RunReport,
+    pub(crate) actuation: Vec<ActuationOutcome>,
 }
 
 pub(crate) fn execute(
@@ -50,8 +52,36 @@ pub(crate) fn execute(
     seed: u64,
     prerecorded: Option<&BTreeMap<u32, ExogenousTick>>,
 ) -> Result<CoreOutput, LabError> {
+    execute_inner(scenario, seed, prerecorded, None)
+}
+
+pub(crate) fn execute_with_actuator(
+    scenario: &Scenario,
+    seed: u64,
+    prerecorded: Option<&BTreeMap<u32, ExogenousTick>>,
+    actuator_config: &ActuatorConfig,
+) -> Result<CoreOutput, LabError> {
+    execute_inner(scenario, seed, prerecorded, Some(actuator_config))
+}
+
+fn execute_inner(
+    scenario: &Scenario,
+    seed: u64,
+    prerecorded: Option<&BTreeMap<u32, ExogenousTick>>,
+    actuator_config: Option<&ActuatorConfig>,
+) -> Result<CoreOutput, LabError> {
     let mut recorder = Recorder::new();
     let mut rng = XorShift64Star::new(seed);
+    let mut actuator = actuator_config
+        .cloned()
+        .map(|config| ActuatorModel::new(config, seed, scenario.steps))
+        .transpose()
+        .map_err(LabError)?;
+    let mut actuation = Vec::with_capacity(if actuator.is_some() {
+        scenario.steps as usize
+    } else {
+        0
+    });
     let mut state = RunState {
         truth: scenario.vehicle.start,
         heading: scenario.vehicle.heading,
@@ -149,13 +179,20 @@ pub(crate) fn execute(
             confidence_threshold_permille: scenario.safety.confidence_threshold_permille,
         };
         let action = choose_action(&controller_input);
+        let actuation_outcome = actuator.as_mut().map(|model| model.apply(tick, action));
+        let realized_action = actuation_outcome
+            .as_ref()
+            .map_or(action, |outcome| outcome.realized_action);
         let truth_from = state.truth;
-        state.truth = match action.heading {
-            Some(heading) => state.truth.translated(heading, action.distance_mm),
+        state.truth = match realized_action.heading {
+            Some(heading) => state.truth.translated(heading, realized_action.distance_mm),
             None => state.truth,
         };
-        if let Some(heading) = action.heading {
+        if let Some(heading) = realized_action.heading {
             state.heading = heading;
+        }
+        if let Some(outcome) = actuation_outcome {
+            actuation.push(outcome);
         }
 
         let telemetry = TickTelemetry {
@@ -229,6 +266,7 @@ pub(crate) fn execute(
     Ok(CoreOutput {
         events: recorder.events,
         report,
+        actuation,
     })
 }
 

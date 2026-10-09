@@ -1,0 +1,141 @@
+{
+  "schema_version": 1,
+  "default_seeds": [42, 1337, 2026],
+  "contract_sets": {
+    "nominal": "contracts-nominal.json",
+    "fallback-response": "contracts-fallback-delayed.json",
+    "stop-response": "contracts-stop.json",
+    "progress": "contracts-progress.json",
+    "unsafe-complete": "contracts-unsafe-complete.json"
+  },
+  "fault_combinations": {
+    "nominal": "actuator-none.json",
+    "continued-stop": "actuator-continued-stop.json",
+    "delayed-movement": "actuator-delayed.json",
+    "simultaneous": "actuator-simultaneous.json",
+    "intermittent": "actuator-intermittent.json"
+  },
+  "cases": [
+    {
+      "id": "nominal-control",
+      "scenario": "nominal-stop.json",
+      "contract_set": "nominal",
+      "fault_combination": "nominal",
+      "expected_by_seed": {
+        "42": { "temporal": "PASS", "safety": "passed", "progress": "completed", "contracts": { "restricted_zone_clear": "PASS", "fallback_response": "PASS", "stop_response": "PASS", "command_resolution": "PASS", "command_applied": "PASS", "no_motion_in_fallback": "PASS", "mission_lifecycle": "PASS" } },
+        "1337": { "temporal": "PASS", "safety": "passed", "progress": "completed", "contracts": { "restricted_zone_clear": "PASS", "fallback_response": "PASS", "stop_response": "PASS", "command_resolution": "PASS", "command_applied": "PASS", "no_motion_in_fallback": "PASS", "mission_lifecycle": "PASS" } },
+        "2026": { "temporal": "PASS", "safety": "passed", "progress": "completed", "contracts": { "restricted_zone_clear": "PASS", "fallback_response": "PASS", "stop_response": "PASS", "command_resolution": "PASS", "command_applied": "PASS", "no_motion_in_fallback": "PASS", "mission_lifecycle": "PASS" } }
+      }
+    },
+    {
+      "id": "gps-fallback-timely",
+      "scenario": "gps-fallback-timely.json",
+      "contract_set": "fallback-response",
+      "fault_combination": "nominal",
+      "expected_by_seed": {
+        "42": { "temporal": "PASS", "safety": "passed", "progress": "incomplete", "contracts": { "restricted_zone_clear": "PASS", "fallback_response": "PASS", "no_motion_in_fallback": "PASS" } },
+        "1337": { "temporal": "PASS", "safety": "passed", "progress": "incomplete", "contracts": { "restricted_zone_clear": "PASS", "fallback_response": "PASS", "no_motion_in_fallback": "PASS" } },
+        "2026": { "temporal": "PASS", "safety": "passed", "progress": "incomplete", "contracts": { "restricted_zone_clear": "PASS", "fallback_response": "PASS", "no_motion_in_fallback": "PASS" } }
+      }
+    },
+    {
+      "id": "gps-fallback-late",
+      "scenario": "gps-fallback-delayed.json",
+      "contract_set": "fallback-response",
+      "fault_combination": "nominal",
+      "expected_by_seed": {
+        "42": { "temporal": "FAIL", "safety": "passed", "progress": "incomplete", "contracts": { "restricted_zone_clear": "PASS", "fallback_response": "FAIL", "no_motion_in_fallback": "PASS" } },
+        "1337": { "temporal": "FAIL", "safety": "passed", "progress": "incomplete", "contracts": { "restricted_zone_clear": "PASS", "fallback_response": "FAIL", "no_motion_in_fallback": "PASS" } },
+        "2026": { "temporal": "FAIL", "safety": "passed", "progress": "incomplete", "contracts": { "restricted_zone_clear": "PASS", "fallback_response": "FAIL", "no_motion_in_fallback": "PASS" } }
+      }
+    },
+    {
+      "id": "compliant-stop",
+      "scenario": "nominal-stop.json",
+      "contract_set": "stop-response",
+      "fault_combination": "nominal",
+      "expected_by_seed": {
+        "42": { "temporal": "PASS", "safety": "passed", "progress": "completed", "contracts": { "restricted_zone_clear": "PASS", "stop_response": "PASS", "command_resolution": "PASS", "command_applied": "PASS", "no_motion_in_fallback": "PASS" } },
+        "1337": { "temporal": "PASS", "safety": "passed", "progress": "completed", "contracts": { "restricted_zone_clear": "PASS", "stop_response": "PASS", "command_resolution": "PASS", "command_applied": "PASS", "no_motion_in_fallback": "PASS" } },
+        "2026": { "temporal": "PASS", "safety": "passed", "progress": "completed", "contracts": { "restricted_zone_clear": "PASS", "stop_response": "PASS", "command_resolution": "PASS", "command_applied": "PASS", "no_motion_in_fallback": "PASS" } }
+      }
+    },
+    {
+      "id": "ignored-stop",
+      "scenario": "nominal-stop.json",
+      "contract_set": "stop-response",
+      "fault_combination": "continued-stop",
+      "expected_by_seed": {
+        "42": { "temporal": "FAIL", "safety": "passed", "progress": "completed", "contracts": { "restricted_zone_clear": "PASS", "stop_response": "FAIL", "command_resolution": "PASS", "command_applied": "PASS", "no_motion_in_fallback": "PASS" } },
+        "1337": { "temporal": "FAIL", "safety": "passed", "progress": "completed", "contracts": { "restricted_zone_clear": "PASS", "stop_response": "FAIL", "command_resolution": "PASS", "command_applied": "PASS", "no_motion_in_fallback": "PASS" } },
+        "2026": { "temporal": "FAIL", "safety": "passed", "progress": "completed", "contracts": { "restricted_zone_clear": "PASS", "stop_response": "FAIL", "command_resolution": "PASS", "command_applied": "PASS", "no_motion_in_fallback": "PASS" } }
+      },
+      "minimized_counterexample": {
+        "original": "runs/m3-stop-counterexample/original/events.json",
+        "reduced": "runs/m3-stop-counterexample/reduced/events.json",
+        "summary": "runs/m3-stop-counterexample/summary.json"
+      }
+    },
+    {
+      "id": "late-command-after-fallback",
+      "scenario": "delayed-after-fallback.json",
+      "contract_set": "nominal",
+      "fault_combination": "delayed-movement",
+      "expected_by_seed": {
+        "42": { "temporal": "FAIL", "safety": "invariant_failed", "progress": "incomplete", "contracts": { "restricted_zone_clear": "PASS", "fallback_response": "PASS", "stop_response": "PASS", "command_resolution": "FAIL", "command_applied": "FAIL", "no_motion_in_fallback": "FAIL", "mission_lifecycle": "INCONCLUSIVE" } },
+        "1337": { "temporal": "FAIL", "safety": "invariant_failed", "progress": "incomplete", "contracts": { "restricted_zone_clear": "PASS", "fallback_response": "PASS", "stop_response": "PASS", "command_resolution": "FAIL", "command_applied": "FAIL", "no_motion_in_fallback": "FAIL", "mission_lifecycle": "INCONCLUSIVE" } },
+        "2026": { "temporal": "FAIL", "safety": "invariant_failed", "progress": "incomplete", "contracts": { "restricted_zone_clear": "PASS", "fallback_response": "PASS", "stop_response": "PASS", "command_resolution": "FAIL", "command_applied": "FAIL", "no_motion_in_fallback": "FAIL", "mission_lifecycle": "INCONCLUSIVE" } }
+      }
+    },
+    {
+      "id": "simultaneous-gps-actuator-faults",
+      "scenario": "gps-fallback-timely.json",
+      "contract_set": "fallback-response",
+      "fault_combination": "simultaneous",
+      "expected_by_seed": {
+        "42": { "temporal": "FAIL", "safety": "invariant_failed", "progress": "incomplete", "contracts": { "restricted_zone_clear": "PASS", "fallback_response": "PASS", "no_motion_in_fallback": "FAIL" } },
+        "1337": { "temporal": "FAIL", "safety": "invariant_failed", "progress": "incomplete", "contracts": { "restricted_zone_clear": "PASS", "fallback_response": "PASS", "no_motion_in_fallback": "FAIL" } },
+        "2026": { "temporal": "FAIL", "safety": "invariant_failed", "progress": "incomplete", "contracts": { "restricted_zone_clear": "PASS", "fallback_response": "PASS", "no_motion_in_fallback": "FAIL" } }
+      }
+    },
+    {
+      "id": "intermittent-actuation-recovery",
+      "scenario": "intermittent-actuation.json",
+      "contract_set": "progress",
+      "fault_combination": "intermittent",
+      "expected_by_seed": {
+        "42": { "temporal": "FAIL", "safety": "passed", "progress": "completed", "contracts": { "mission_progress": "FAIL" } },
+        "1337": { "temporal": "FAIL", "safety": "passed", "progress": "completed", "contracts": { "mission_progress": "FAIL" } },
+        "2026": { "temporal": "FAIL", "safety": "passed", "progress": "completed", "contracts": { "mission_progress": "FAIL" } }
+      }
+    },
+    {
+      "id": "safe-incomplete-mission",
+      "scenario": "incomplete-safe.json",
+      "contract_set": "progress",
+      "fault_combination": "nominal",
+      "expected_by_seed": {
+        "42": { "temporal": "INCONCLUSIVE", "safety": "passed", "progress": "incomplete", "contracts": { "mission_progress": "INCONCLUSIVE" } },
+        "1337": { "temporal": "INCONCLUSIVE", "safety": "passed", "progress": "incomplete", "contracts": { "mission_progress": "INCONCLUSIVE" } },
+        "2026": { "temporal": "INCONCLUSIVE", "safety": "passed", "progress": "incomplete", "contracts": { "mission_progress": "INCONCLUSIVE" } }
+      }
+    },
+    {
+      "id": "unsafe-complete-mission",
+      "scenario": "unsafe-complete.json",
+      "contract_set": "unsafe-complete",
+      "fault_combination": "nominal",
+      "expected_by_seed": {
+        "42": { "temporal": "FAIL", "safety": "invariant_failed", "progress": "completed", "contracts": { "restricted_zone_clear": "FAIL", "mission_lifecycle": "PASS" } },
+        "1337": { "temporal": "FAIL", "safety": "invariant_failed", "progress": "completed", "contracts": { "restricted_zone_clear": "FAIL", "mission_lifecycle": "PASS" } },
+        "2026": { "temporal": "FAIL", "safety": "invariant_failed", "progress": "completed", "contracts": { "restricted_zone_clear": "FAIL", "mission_lifecycle": "PASS" } }
+      }
+    }
+  ],
+  "budgets": {
+    "max_cases": 30,
+    "max_runs": 90,
+    "max_artifact_bytes": 67108864,
+    "time_budget_seconds": 120
+  }
+}

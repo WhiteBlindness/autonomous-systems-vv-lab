@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "contracts": [
+    { "type": "always", "id": "restricted_zone_clear", "predicate": "restricted_zone_clear" },
+    {
+      "type": "bounded_response",
+      "id": "stop_response",
+      "trigger": "stop_commanded",
+      "required": "vehicle_stationary",
+      "within_ticks": 2
+    },
+    {
+      "type": "bounded_response",
+      "id": "command_resolution",
+      "trigger": "movement_commanded",
+      "required": "command_resolved",
+      "within_ticks": 2,
+      "correlation": "command_id"
+    },
+    {
+      "type": "bounded_response",
+      "id": "command_applied",
+      "trigger": "movement_commanded",
+      "required": "command_applied",
+      "within_ticks": 2,
+      "correlation": "command_id"
+    },
+    { "type": "never", "id": "no_motion_in_fallback", "predicate": "movement_while_fallback" }
+  ]
+}

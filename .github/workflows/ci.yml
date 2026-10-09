@@ -31,6 +31,14 @@ jobs:
           toolchain: "1.99.0"
           components: clippy, rustfmt
 
+      - name: Install cargo-audit
+        if: runner.os == 'Linux'
+        run: cargo install cargo-audit --locked --version 0.22.2
+
+      - name: Audit locked dependencies
+        if: runner.os == 'Linux'
+        run: cargo audit
+
       - name: Install LLVM coverage support
         if: runner.os == 'Linux'
         run: |
@@ -66,8 +74,21 @@ jobs:
           VV_LAB_BINARY: target/release/vv-lab${{ matrix.exe_suffix }}
         run: python -m unittest discover -s tests -p "test_*.py"
 
+      - name: Minimize the M3 actuator stop failure
+        env:
+          VV_LAB_BINARY: target/release/vv-lab${{ matrix.exe_suffix }}
+        run: python scripts/m3_minimize_failure.py scenarios/m3/nominal-stop.json --contracts scenarios/m3/contracts-stop.json --actuator scenarios/m3/actuator-continued-stop.json --contract-id stop_response --seed 42 --output runs/m3-stop-counterexample --max-candidates 8 --time-budget-seconds 30
+
+      - name: Replay the original and reduced M3 artifacts
+        run: |
+          target/release/vv-lab${{ matrix.exe_suffix }} replay runs/m3-stop-counterexample/original/events.json
+          target/release/vv-lab${{ matrix.exe_suffix }} replay runs/m3-stop-counterexample/reduced/events.json
+
       - name: Run deterministic scenario campaign
         run: python scripts/run_campaign.py --binary target/release/vv-lab${{ matrix.exe_suffix }} --suite all --variants standard,short-stall,fault-stress --seeds 42,1337 --max-runs 256 --max-cases 80 --max-artifact-bytes 67108864 --time-budget-seconds 120 --output-root runs/ci-${{ runner.os }}
+
+      - name: Run bounded M3 verification campaign
+        run: python scripts/run_campaign.py --binary target/release/vv-lab${{ matrix.exe_suffix }} --suite m3 --seeds 42,1337,2026 --max-runs 90 --max-cases 30 --max-artifact-bytes 67108864 --time-budget-seconds 120 --output-root runs/ci-m3-${{ runner.os }}
 
       - name: Minimize the seeded natural sensor fault
         env:
@@ -84,7 +105,9 @@ jobs:
           name: ${{ runner.os }}-campaign
           path: |
             runs/ci-${{ runner.os }}/campaign-*
+            runs/ci-m3-${{ runner.os }}/campaign-*
             runs/ci-minimized
+            runs/m3-stop-counterexample
           if-no-files-found: warn
 
     defaults:

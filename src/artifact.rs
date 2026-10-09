@@ -250,7 +250,7 @@ pub(crate) fn extract_exogenous(
     Ok(result)
 }
 
-fn hash_serializable<T: Serialize>(value: &T) -> String {
+pub(crate) fn hash_serializable<T: Serialize + ?Sized>(value: &T) -> String {
     let bytes = serde_json::to_vec(value).expect("typed deterministic data always serializes");
     let digest = Sha256::digest(bytes);
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
