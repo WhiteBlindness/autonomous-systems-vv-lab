@@ -92,6 +92,37 @@ Para invariantes, a assinatura conserva o conjunto de invariantes falhados, a co
 
 A métrica de pesquisa soma passos, número e duração de janelas e severidade dos parâmetros com pesos explícitos em `complexity_metrics`. É uma ordenação da pesquisa, sem interpretação física ou promessa de mínimo global. Os limites são aplicados a candidatos, prazo, saída retida e espaço temporário; atingir um limite produz um estado explícito. Um orçamento de tempo pode interromper a mesma ordem de pesquisa em pontos diferentes consoante a máquina.
 
+## Contratos temporais e atuadores no M3
+
+O M3 acrescenta contratos JSON de versão 1. O esquema aceita apenas operadores e predicados tipados: `always`, `never`, `bounded_response`, `ordered_transition` e `bounded_progress`. Rejeita campos desconhecidos, identificadores repetidos, referências sem tipo correspondente e sequências de transição descontínuas. Não interpreta expressões ou código fornecido pelo utilizador.
+
+O monitor Rust percorre um traço finito, com passos contíguos a partir de 1. Um prazo de `N` passos inclui o instante de ativação e termina em `passo_de_ativação + N`; por isso, `N = 0` só aceita uma resposta no próprio passo. Se um predicado de ativação permanecer verdadeiro, o esquema cria uma obrigação quando a duração declarada é atingida e só cria outra depois de a condição passar a falsa ou desconhecida e voltar a qualificar-se. Os comandos de movimento são obrigações independentes, correlacionadas pelo número de sequência do evento de origem.
+
+Uma resposta observada no instante de ativação satisfaz a obrigação. A ordem das mudanças de estado segue a sequência dos eventos de origem. A monitorização de progresso compara o aumento acumulado de progresso significativo medido pela trajetória real. Uma observação GPS ausente que o simulador registou é evidência positiva de `localization_unreliable`. Se a própria telemetria do traço estiver ausente e não houver esse facto, o predicado dependente da localização é desconhecido. A monitorização conserva falhas já demonstradas; uma obrigação pendente no fim do traço é `INCONCLUSIVE`, tal como uma missão que termina antes de um prazo ainda aberto. `PASS` significa apenas que a propriedade se verificou no intervalo finito fornecido, não que qualquer execução futura esteja garantida.
+
+Os contratos de comando distinguem uma resolução observada pelo atuador da aplicação física. `command_resolved` só aceita uma resolução observada no atuador. Uma falha explícita pode satisfazer este contrato de resolução, mas não o contrato `command_applied`. Se o prazo expirar sem resposta do atuador, o contrato falha e o sidecar regista `Timeout` como classificação derivada pelo monitor, não como evento físico. Uma aplicação atrasada continua registada quando ocorre e não apaga a falha de um contrato que já expirou.
+
+As transições ordenadas da versão 1 só aceitam os domínios `mission` e `safety`, cujas mudanças são registadas como eventos de origem. As falhas do atuador têm uma sequência própria de eventos e resultados; ainda não formam um domínio de transições ordenadas.
+
+O controlador continua a receber apenas observações e configuração da missão. A saída pedida passa pelo modelo do atuador antes de alterar o estado real:
+
+```mermaid
+flowchart LR
+    Observation[Observação e missão] --> Controller[Controlador]
+    Controller --> Requested[Comando pedido]
+    Requested --> Actuator[Atuador e falhas M3]
+    Actuator --> Realized[Movimento realizado]
+    Realized --> Truth[Estado real]
+    Truth --> Independent[Invariantes e monitor temporal]
+    Actuator --> Sidecar[verification.json]
+    Truth --> Events[events.json v1]
+    Independent --> Sidecar
+```
+
+Uma configuração sem falhas preserva a ação do M2. As falhas declarativas incluem perda de movimento, atraso determinístico e continuação do último movimento depois de um pedido de paragem. A semente própria do atuador é combinada com a semente da missão, num fluxo pseudoaleatório separado do gerador dos sensores. As janelas usam passos inclusivos; comandos atrasados podem executar depois da janela e sobrepor-se a uma paragem posterior, segundo a ordem documentada no módulo.
+
+O artefacto novo `verification.json` guarda a configuração do atuador, os contratos usados, os resultados do monitor, as evidências e as referências aos eventos de origem. O formato legado `events.json` e `report.json` mantém-se v1. A reprodução M3 valida ambos os artefactos, executa novamente a simulação e o monitor e compara as evidências. Python escolhe cenários e organiza campanhas limitadas; não calcula o resultado autoritativo dos contratos.
+
 ## Evolução do contrato
 
 Alterações na ordem de eventos, arredondamentos, gerador, confiança, grafo ou serialização podem mudar o comportamento. Exigem cenários de regressão e decisão explícita sobre a versão do contrato. Separar serviços ou introduzir um protocolo só se houver uma necessidade real de interface.

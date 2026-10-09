@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "seed": 42,
+  "faults": [
+    {
+      "kind": "continued_movement",
+      "id": "stuck_after_stop",
+      "windows": [{ "start_tick": 7, "end_tick": 9 }],
+      "probability_permille": 1000
+    }
+  ]
+}

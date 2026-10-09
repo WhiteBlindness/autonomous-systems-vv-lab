@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "seed": 42,
+  "faults": [
+    {
+      "kind": "lost_movement",
+      "id": "lost_command",
+      "windows": [{ "start_tick": 4, "end_tick": 7 }],
+      "probability_permille": 1000
+    },
+    {
+      "kind": "continued_movement",
+      "id": "stuck_after_fallback",
+      "windows": [{ "start_tick": 6, "end_tick": 10 }],
+      "probability_permille": 1000
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "contracts": [
+    {
+      "type": "bounded_progress",
+      "id": "mission_progress",
+      "within_ticks": 1,
+      "minimum_increase_mm": 250
+    }
+  ]
+}
