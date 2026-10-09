@@ -573,11 +573,16 @@ class M3CampaignCliTests(unittest.TestCase):
             self.assertEqual(by_id["nominal-control"]["actual"]["temporal"], "PASS")
             self.assertTrue(by_id["nominal-control"]["deterministic"])
             self.assertEqual(by_id["nominal-control"]["replay_exit_code"], 0)
+            self.assertGreaterEqual(by_id["nominal-control"]["replay_elapsed_seconds"], 0.0)
             self.assertEqual(by_id["ignored-stop"]["actual"]["temporal"], "FAIL")
             self.assertEqual(by_id["ignored-stop"]["actual"]["safety"], "passed")
             self.assertEqual(by_id["ignored-stop"]["actual"]["progress"], "completed")
             self.assertTrue(by_id["ignored-stop"]["deterministic"])
             self.assertEqual(by_id["ignored-stop"]["replay_exit_code"], 0)
+            self.assertAlmostEqual(
+                summary["replay_elapsed_seconds"],
+                sum(case["replay_elapsed_seconds"] for case in summary["cases"]),
+            )
 
 
 if __name__ == "__main__":

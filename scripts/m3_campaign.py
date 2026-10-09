@@ -748,12 +748,14 @@ def _execute_case(
     if not repeated:
         raise M3CampaignError("deterministic repeat differs byte-for-byte from the first M3 run")
 
+    replay_started = time.monotonic()
     replay = _counted_process(
         [str(binary), "replay", str(first_dir / "events.json")],
         deadline=deadline,
         operation="replay",
         command_counts=command_counts,
     )
+    replay_elapsed_seconds = round(time.monotonic() - replay_started, 4)
     if replay.returncode != 0:
         raise M3CampaignError(f"replay returned {replay.returncode}")
 
@@ -801,6 +803,7 @@ def _execute_case(
         "errors": errors,
         "deterministic": repeated,
         "replay_exit_code": replay.returncode,
+        "replay_elapsed_seconds": replay_elapsed_seconds,
         "temporal_failures": temporal_failures,
         "temporal_failure_count": len(temporal_failures),
         "minimized_counterexample": counterexample_reference,
@@ -886,6 +889,9 @@ def _campaign_summary(
             "checked": sum("replay_exit_code" in case for case in cases),
             "passed": sum(case.get("replay_exit_code") == 0 for case in cases),
         },
+        "replay_elapsed_seconds": round(
+            sum(case.get("replay_elapsed_seconds", 0.0) for case in cases), 4
+        ),
         "temporal_outcome_counts": temporal_counts,
         "safety_outcome_counts": safety_counts,
         "progress_outcome_counts": progress_counts,
