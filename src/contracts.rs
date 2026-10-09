@@ -25,7 +25,9 @@ impl ContractSet {
     /// Parse JSON and validate both its shape and its semantic constraints.
     pub fn from_json(text: &str) -> Result<Self, ContractError> {
         if text.len() > MAX_CONTRACT_BYTES {
-            return Err(ContractError("contract document exceeds the 1 MiB limit".into()));
+            return Err(ContractError(
+                "contract document exceeds the 1 MiB limit".into(),
+            ));
         }
         let contracts: Self = serde_json::from_str(text)
             .map_err(|error| ContractError(format!("invalid contract JSON: {error}")))?;
@@ -74,16 +76,14 @@ impl ContractSet {
                             | Predicate::CommandResolved
                     ) || matches!(
                         required,
-                        Predicate::CommandApplied
-                            | Predicate::CommandResolved
+                        Predicate::CommandApplied | Predicate::CommandResolved
                     );
                     if command_scoped
                         && (*correlation != Some(Correlation::CommandId)
                             || *trigger != Predicate::MovementCommanded
                             || !matches!(
                                 required,
-                                Predicate::CommandApplied
-                                    | Predicate::CommandResolved
+                                Predicate::CommandApplied | Predicate::CommandResolved
                             )
                             || *trigger_for_ticks != 1)
                     {
